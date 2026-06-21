@@ -2236,16 +2236,13 @@ typedef InterpreterOptions = {
         builtins.bindAll(topLevelFunctions);
 
         if (functions != null) {
-            // The functions map reaches us in different runtime shapes depending on
-            // the host binding: a StringMap (JVM/C#/C++/CLI) or an anonymous object
-            // (JS object, Lua table, Python _hx_AnonObject). Iterate whichever it is.
-            final fnsDyn:Dynamic = functions;
-            if (Std.isOfType(fnsDyn, haxe.Constraints.IMap)) {
-                final fnsMap:Map<String, Any> = cast fnsDyn;
-                for (key => func in fnsMap) registerTopLevelFunction(key, func);
-            }
-            else {
-                for (key in Reflect.fields(fnsDyn)) registerTopLevelFunction(key, Reflect.field(fnsDyn, key));
+            // FunctionsMap is a DynamicAccess (bindings that pass an anon object:
+            // JS object, Lua table, Python _hx_AnonObject) or a StringMap (bindings
+            // that build a Haxe map: JVM/C#/C++/CLI). The `loreline_functions_map_dynamic_access`
+            // define picks the matching type per build, so this single loop compiles
+            // to the right iteration on every target.
+            for (key => func in functions) {
+                registerTopLevelFunction(key, func);
             }
         }
 

@@ -9,6 +9,9 @@ Follows the same test protocol as the JS, C#, C++, and Python test runners:
   - Runs roundtrip (parse -> print -> parse -> print) stability checks
   - Reports pass/fail counts
 
+Drives the PUBLIC `loreline` module (the same API a real user uses), so the
+suite exercises the public wrapper layer end to end — including custom functions.
+
 Note: ast-print is intentionally only run by the CLI test runner —
 AstPrinter is a pure Haxe debug pretty-printer with no target-specific
 behavior, so a single CLI run is enough to catch any missing node-type
@@ -16,11 +19,11 @@ case. That's why the CLI test count is higher than each per-target
 runner's count.
 ]]
 
--- Add lua/ to package path so we can require loreline.core
+-- Add lua/ to package path so we can require the public loreline module
 local script_dir = arg[0]:match("(.*/)")  or "./"
 package.path = script_dir .. "?.lua;" .. script_dir .. "?/init.lua;" .. package.path
 
-dofile(script_dir .. "loreline/core.lua")
+local loreline = require("loreline")
 
 local pass_count = 0
 local fail_count = 0
@@ -82,14 +85,27 @@ local function handle_file(path, callback)
     callback(content)
 end
 
-local function hx_array_to_lua(arr)
-    if arr == nil then return {} end
-    local result = {}
-    for i = 0, arr.length - 1 do
-        result[i + 1] = arr[i]
-    end
-    return result
-end
+-- Canonical host-registered functions used by test/Functions-Custom.lor to verify
+-- the custom-function contract via the PUBLIC API: each receives (interpreter, args),
+-- where `interpreter` is the public Lua Interpreter wrapper (snake_case) and `args`
+-- is a normal 1-indexed Lua table, and the interpreter can read/write runtime state.
+local custom_test_functions = {
+    custom_echo = function(interp, args)
+        local parts = {}
+        for i = 1, #args do parts[i] = tostring(args[i]) end
+        return table.concat(parts, ",")
+    end,
+    custom_arg_count = function(interp, args)
+        return #args
+    end,
+    custom_set_state = function(interp, args)
+        interp:set_state_field(args[1], args[2])
+        return nil
+    end,
+    custom_get_state = function(interp, args)
+        return interp:get_state_field(args[1])
+    end,
+}
 
 local function insert_tags_in_text(text, tags, multiline)
     local offsets_with_tags = {}
@@ -323,19 +339,18 @@ local function run_test(file_path, content, test_item, crlf)
     local parsed_script = {nil}
     local result = {nil}
 
-    -- Parse the script up-front so loadLocale can walk its import tree
-    local early_script = __loreline_Loreline.parse(content, file_path, handle_file)
+    -- Parse the script up-front so load_locale can walk its import tree
+    local early_script = loreline.parse(content, file_path, handle_file)
 
-    -- Build options (translations loaded across the import tree)
-    local options = nil
+    -- Translations are loaded across the import tree; passed to play/resume in options
+    local options = {functions = custom_test_functions}
     local translation_val = test_item.translation
     if translation_val and early_script then
-        local lang = translation_val
-        local translations = __loreline_Loreline.loadLocale(
-            lang, early_script, file_path, handle_file, nil
+        local translations = loreline.load_locale(
+            translation_val, early_script, file_path, handle_file, nil
         )
         if translations then
-            options = _hx_o({__fields__={translations=true}, translations=translations})
+            options = {functions = custom_test_functions, translations = translations}
         end
     end
 
@@ -354,17 +369,24 @@ local function run_test(file_path, content, test_item, crlf)
         end
     end
 
-    local function on_finish(interp)
+    local on_finish, on_choice, on_dialogue
+
+    on_finish = function(interp)
         local cmp = compare_output(expected, output[1])
         result[1] = {cmp == -1, output[1], expected, nil}
     end
 
-    local function on_choice(interp, choice_options, select)
-        local opts = hx_array_to_lua(choice_options)
-        for _, opt in ipairs(opts) do
+    local function resume(script, save_data)
+        loreline.resume(
+            script, on_dialogue, on_choice, on_finish, save_data, nil, options
+        )
+    end
+
+    on_choice = function(interp, choice_options, select)
+        for _, opt in ipairs(choice_options) do
             local prefix = opt.enabled and "+" or "-"
             local multiline = opt.text:find("\n") ~= nil
-            local opt_tags = opt.tags and hx_array_to_lua(opt.tags) or {}
+            local opt_tags = opt.tags or {}
             local tagged_text = insert_tags_in_text(opt.text, opt_tags, multiline)
             output[1] = output[1] .. prefix .. " " .. tagged_text .. "\n"
         end
@@ -376,22 +398,14 @@ local function run_test(file_path, content, test_item, crlf)
             local save_data = interp:save()
 
             if restore_input then
-                local restore_script = __loreline_Loreline.parse(
-                    restore_input, file_path, handle_file
-                )
+                local restore_script = loreline.parse(restore_input, file_path, handle_file)
                 if restore_script then
-                    __loreline_Loreline.resume(
-                        restore_script, on_dialogue, on_choice, on_finish,
-                        save_data, nil, options
-                    )
+                    resume(restore_script, save_data)
                 else
                     result[1] = {false, output[1], expected, "Error parsing restoreInput script"}
                 end
             else
-                __loreline_Loreline.resume(
-                    parsed_script[1], on_dialogue, on_choice, on_finish,
-                    save_data, nil, options
-                )
+                resume(parsed_script[1], save_data)
             end
             return
         end
@@ -406,11 +420,11 @@ local function run_test(file_path, content, test_item, crlf)
         end
     end
 
-    function on_dialogue(interp, character, text, tags, advance)
+    on_dialogue = function(interp, character, text, tags, advance)
         local multiline = text:find("\n") ~= nil
-        local lua_tags = tags and hx_array_to_lua(tags) or {}
+        local lua_tags = tags or {}
         if character ~= nil then
-            local char_name = interp:getCharacterField(character, "name")
+            local char_name = interp:get_character_field(character, "name")
             if char_name == nil then
                 char_name = character
             end
@@ -430,22 +444,14 @@ local function run_test(file_path, content, test_item, crlf)
             local save_data = interp:save()
 
             if restore_input then
-                local restore_script = __loreline_Loreline.parse(
-                    restore_input, file_path, handle_file
-                )
+                local restore_script = loreline.parse(restore_input, file_path, handle_file)
                 if restore_script then
-                    __loreline_Loreline.resume(
-                        restore_script, on_dialogue, on_choice, on_finish,
-                        save_data, nil, options
-                    )
+                    resume(restore_script, save_data)
                 else
                     result[1] = {false, output[1], expected, "Error parsing restoreInput script"}
                 end
             else
-                __loreline_Loreline.resume(
-                    parsed_script[1], on_dialogue, on_choice, on_finish,
-                    save_data, nil, options
-                )
+                resume(parsed_script[1], save_data)
             end
             return
         end
@@ -458,7 +464,7 @@ local function run_test(file_path, content, test_item, crlf)
         local script = early_script
         if script then
             parsed_script[1] = script
-            __loreline_Loreline.play(
+            loreline.play(
                 script, on_dialogue, on_choice, on_finish, beat_name, options
             )
         else
@@ -488,9 +494,9 @@ local function main()
     local test_dir = arg[1]
 
     -- Test fixtures exercise every supported translation format.
-    __loreline_Loreline.translationFormat("po", true)
-    __loreline_Loreline.translationFormat("xliff", true)
-    __loreline_Loreline.translationFormat("csv", true)
+    loreline.translation_format("po", true)
+    loreline.translation_format("xliff", true)
+    loreline.translation_format("csv", true)
 
     local test_files = collect_test_files(test_dir)
 
@@ -585,7 +591,7 @@ local function main()
                     content = content:gsub("\n", "\r\n")
                 end
 
-                local script1 = __loreline_Loreline.parse(content, file_path, handle_file)
+                local script1 = loreline.parse(content, file_path, handle_file)
                 if not script1 then
                     fail_count = fail_count + 1
                     io.write("\027[1m\027[31mFAIL\027[0m - \027[90m" .. label .. "\027[0m\n")
@@ -593,15 +599,15 @@ local function main()
                     return
                 end
 
-                local print1 = __loreline_Loreline.print(script1, "  ", newline)
-                local script2 = __loreline_Loreline.parse(print1, file_path, handle_file)
+                local print1 = loreline.print(script1, "  ", newline)
+                local script2 = loreline.parse(print1, file_path, handle_file)
                 if not script2 then
                     fail_count = fail_count + 1
                     io.write("\027[1m\027[31mFAIL\027[0m - \027[90m" .. label .. "\027[0m\n")
                     io.write("  Error: Failed to parse printed script\n")
                     return
                 end
-                local print2 = __loreline_Loreline.print(script2, "  ", newline)
+                local print2 = loreline.print(script2, "  ", newline)
 
                 if print1 ~= print2 then
                     fail_count = fail_count + 1
@@ -672,15 +678,15 @@ local function main()
             local ok3, err3 = pcall(function()
                 local content = raw_content:gsub("\r\n", "\n")
                 if crlf then content = content:gsub("\n", "\r\n") end
-                local script = __loreline_Loreline.parse(content, file_path, handle_file)
+                local script = loreline.parse(content, file_path, handle_file)
                 if not script then
                     fail_count = fail_count + 1
                     io.write("\027[1m\027[31mFAIL\027[0m - \027[90m" .. json_label .. "\027[0m\n")
                     io.write("  Error: Failed to parse script\n")
                 else
-                    local json1 = __loreline_Json.stringify(script:toJson(), false)
-                    local script2 = __loreline_Script.fromJson(__loreline_Json.parse(json1))
-                    local json2 = __loreline_Json.stringify(script2:toJson(), false)
+                    local json1 = script:to_json(false)
+                    local script2 = loreline.Script.from_json(json1)
+                    local json2 = script2:to_json(false)
 
                     if json1 == json2 then
                         pass_count = pass_count + 1

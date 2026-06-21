@@ -1,7 +1,9 @@
 --class-path src
 --main loreline.lib.Library
---cs out/cs
---no-output
+--cs build/cs
 -D no-compilation
+-D no-root
+-D real-position
 -D loreline_use_cs_types
 -D loreline_cs_api
+-D erase-generics

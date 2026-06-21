@@ -8,6 +8,9 @@ Follows the same test protocol as the JS, C#, and C++ test runners:
   - Runs roundtrip (parse -> print -> parse -> print) stability checks
   - Reports pass/fail counts
 
+Drives the PUBLIC `loreline` binding (the same API a real user uses), so the
+suite exercises the public wrapper layer end to end — including custom functions.
+
 Note: ast-print is intentionally only run by the CLI test runner —
 AstPrinter is a pure Haxe debug pretty-printer with no target-specific
 behavior, so a single CLI run is enough to catch any missing node-type
@@ -22,12 +25,24 @@ import sys
 # Ensure the py/ package is importable when run from the repo root
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from loreline._core import loreline_Loreline, loreline_Interpreter, loreline_Json, loreline_Script, _hx_AnonObject  # noqa: E402
+from loreline import Loreline, Script  # noqa: E402
 
 pass_count = 0
 fail_count = 0
 file_count = 0
 file_fail_count = 0
+
+
+# Canonical host-registered functions used by test/Functions-Custom.lor to verify
+# the custom-function contract via the PUBLIC API: each receives (interpreter, args),
+# where `interpreter` is the public Python Interpreter wrapper (snake_case) and
+# `args` is a native list, and the interpreter can read/write runtime state.
+custom_test_functions = {
+    "custom_echo": lambda interp, args: ",".join(str(a) for a in args),
+    "custom_arg_count": lambda interp, args: len(args),
+    "custom_set_state": lambda interp, args: interp.set_state_field(args[0], args[1]),
+    "custom_get_state": lambda interp, args: interp.get_state_field(args[0]),
+}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -254,19 +269,16 @@ def run_test(file_path, content, test_item, crlf):
     parsed_script = [None]
     result = [None]  # (passed, actual, expected, error)
 
-    # Parse the script up-front so loadLocale can walk its import tree
-    early_script = loreline_Loreline.parse(content, file_path, handle_file)
+    # Parse the script up-front so load_locale can walk its import tree
+    early_script = Loreline.parse(content, file_path, handle_file)
 
-    # Build options (translations loaded across the import tree)
-    options = None
+    # Translations are loaded across the import tree; passed to play/resume as a kwarg
+    translations = None
     translation_val = test_item.get("translation")
     if translation_val and early_script:
-        lang = translation_val
-        translations = loreline_Loreline.loadLocale(
-            lang, early_script, file_path, handle_file, None
+        translations = Loreline.load_locale(
+            translation_val, early_script, file_path, handle_file
         )
-        if translations:
-            options = _hx_AnonObject({"translations": translations})
 
     # Load restoreFile content if specified
     restore_input = None
@@ -283,12 +295,18 @@ def run_test(file_path, content, test_item, crlf):
         cmp = compare_output(expected, output[0])
         result[0] = (cmp == -1, output[0], expected, None)
 
+    def resume(script, save_data):
+        Loreline.resume(
+            script, on_dialogue, on_choice, on_finish, save_data,
+            functions=custom_test_functions, translations=translations,
+        )
+
     def on_dialogue(interp, character, text, tags, advance):
         multiline = "\n" in text
         if tags is None:
             tags = []
         if character is not None:
-            char_name = interp.getCharacterField(character, "name")
+            char_name = interp.get_character_field(character, "name")
             if char_name is None:
                 char_name = character
             tagged_text = insert_tags_in_text(text, tags, multiline)
@@ -306,21 +324,13 @@ def run_test(file_path, content, test_item, crlf):
             save_data = interp.save()
 
             if restore_input is not None:
-                restore_script = loreline_Loreline.parse(
-                    restore_input, file_path, handle_file
-                )
+                restore_script = Loreline.parse(restore_input, file_path, handle_file)
                 if restore_script:
-                    loreline_Loreline.resume(
-                        restore_script, on_dialogue, on_choice, on_finish,
-                        save_data, None, options
-                    )
+                    resume(restore_script, save_data)
                 else:
                     result[0] = (False, output[0], expected, "Error parsing restoreInput script")
             else:
-                loreline_Loreline.resume(
-                    parsed_script[0], on_dialogue, on_choice, on_finish,
-                    save_data, None, options
-                )
+                resume(parsed_script[0], save_data)
             return
 
         dialogue_count[0] += 1
@@ -341,21 +351,13 @@ def run_test(file_path, content, test_item, crlf):
             save_data = interp.save()
 
             if restore_input is not None:
-                restore_script = loreline_Loreline.parse(
-                    restore_input, file_path, handle_file
-                )
+                restore_script = Loreline.parse(restore_input, file_path, handle_file)
                 if restore_script:
-                    loreline_Loreline.resume(
-                        restore_script, on_dialogue, on_choice, on_finish,
-                        save_data, None, options
-                    )
+                    resume(restore_script, save_data)
                 else:
                     result[0] = (False, output[0], expected, "Error parsing restoreInput script")
             else:
-                loreline_Loreline.resume(
-                    parsed_script[0], on_dialogue, on_choice, on_finish,
-                    save_data, None, options
-                )
+                resume(parsed_script[0], save_data)
             return
 
         choice_count[0] += 1
@@ -370,8 +372,9 @@ def run_test(file_path, content, test_item, crlf):
         script = early_script
         if script:
             parsed_script[0] = script
-            loreline_Loreline.play(
-                script, on_dialogue, on_choice, on_finish, beat_name, options
+            Loreline.play(
+                script, on_dialogue, on_choice, on_finish, beat_name,
+                functions=custom_test_functions, translations=translations,
             )
         else:
             result[0] = (False, output[0], expected, "Error parsing script")
@@ -396,9 +399,9 @@ def main():
     test_dir = sys.argv[1]
 
     # Test fixtures exercise every supported translation format.
-    loreline_Loreline.translationFormat("po", True)
-    loreline_Loreline.translationFormat("xliff", True)
-    loreline_Loreline.translationFormat("csv", True)
+    Loreline.translation_format("po", True)
+    Loreline.translation_format("xliff", True)
+    Loreline.translation_format("csv", True)
 
     test_files = collect_test_files(test_dir)
 
@@ -472,7 +475,7 @@ def main():
                     content = content.replace("\n", "\r\n")
 
                 # Parse original
-                script1 = loreline_Loreline.parse(content, file_path, handle_file)
+                script1 = Loreline.parse(content, file_path, handle_file)
                 if not script1:
                     fail_count += 1
                     print(f"\033[1m\033[31mFAIL\033[0m - \033[90m{label}\033[0m")
@@ -480,14 +483,14 @@ def main():
                     continue
 
                 # Structural check: print -> parse -> print must be stable
-                print1 = loreline_Loreline.print(script1, "  ", newline)
-                script2 = loreline_Loreline.parse(print1, file_path, handle_file)
+                print1 = Loreline.print(script1, "  ", newline)
+                script2 = Loreline.parse(print1, file_path, handle_file)
                 if not script2:
                     fail_count += 1
                     print(f"\033[1m\033[31mFAIL\033[0m - \033[90m{label}\033[0m")
                     print("  Error: Failed to parse printed script")
                     continue
-                print2 = loreline_Loreline.print(script2, "  ", newline)
+                print2 = Loreline.print(script2, "  ", newline)
 
                 if print1 != print2:
                     fail_count += 1
@@ -554,15 +557,15 @@ def main():
                 content = raw_content.replace("\r\n", "\n")
                 if crlf:
                     content = content.replace("\n", "\r\n")
-                script = loreline_Loreline.parse(content, file_path, handle_file)
+                script = Loreline.parse(content, file_path, handle_file)
                 if not script:
                     fail_count += 1
                     print(f"\033[1m\033[31mFAIL\033[0m - \033[90m{json_label}\033[0m")
                     print("  Error: Failed to parse script")
                 else:
-                    json1 = loreline_Json.stringify(script.toJson(), False)
-                    script2 = loreline_Script.fromJson(loreline_Json.parse(json1))
-                    json2 = loreline_Json.stringify(script2.toJson(), False)
+                    json1 = script.to_json()
+                    script2 = Script.from_json(json1)
+                    json2 = script2.to_json()
 
                     if json1 == json2:
                         pass_count += 1

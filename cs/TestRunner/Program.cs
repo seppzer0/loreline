@@ -413,6 +413,20 @@ class Program
         public string Error;
     }
 
+    // Canonical host-registered functions used by test/Functions-Custom.lor to verify
+    // the custom-function contract: each receives (interpreter, args), where args is an
+    // array and the interpreter can read/write runtime state.
+    static Dictionary<string, Interpreter.Function> CustomTestFunctions()
+    {
+        return new Dictionary<string, Interpreter.Function>
+        {
+            ["custom_echo"] = (interp, args) => string.Join(",", args.Select(a => a?.ToString() ?? "")),
+            ["custom_arg_count"] = (interp, args) => args.Length,
+            ["custom_set_state"] = (interp, args) => { interp.SetStateField((string) args[0], args[1]); return null; },
+            ["custom_get_state"] = (interp, args) => interp.GetStateField((string) args[0]),
+        };
+    }
+
     static TestResult RunTest(string filePath, string content, TestItem item, bool crlf)
     {
         if (crlf)
@@ -438,8 +452,10 @@ class Program
         // Parse the script up-front so loadLocale can walk its import tree
         Script earlyScript = Engine.Parse(content, filePath, HandleFile);
 
-        // Build options (translations loaded across the import tree)
+        // Build options (always register the canonical custom functions; add
+        // translations across the import tree if requested)
         Interpreter.InterpreterOptions options = Interpreter.InterpreterOptions.Default();
+        options.Functions = CustomTestFunctions();
         if (item.Translation != null && earlyScript != null)
         {
             string lang = item.Translation;

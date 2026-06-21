@@ -4,3 +4,5 @@
 -D loreline_typedef_options
 -D loreline_functions_map_dynamic_access
 -D loreline_node_id_class
+-D loreline_auto_wrap_functions
+-D loreline_py_api

@@ -238,6 +238,25 @@ public class TestRunner {
     // ── Test runner ─────────────────────────────────────────────────────
 
     @SuppressWarnings("unchecked")
+    // Canonical host-registered functions used by test/Functions-Custom.lor to verify
+    // the custom-function contract: each receives (interpreter, args), where args is an
+    // array and the interpreter can read/write runtime state.
+    static Map<String, LorelineFunction> customTestFunctions() {
+        Map<String, LorelineFunction> fns = new HashMap<>();
+        fns.put("custom_echo", (interp, args) -> {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < args.length; i++) {
+                if (i > 0) sb.append(",");
+                sb.append(String.valueOf(args[i]));
+            }
+            return sb.toString();
+        });
+        fns.put("custom_arg_count", (interp, args) -> args.length);
+        fns.put("custom_set_state", (interp, args) -> { interp.setStateField((String) args[0], args[1]); return null; });
+        fns.put("custom_get_state", (interp, args) -> interp.getStateField((String) args[0]));
+        return fns;
+    }
+
     static Object[] runTest(String filePath, String rawContent, Map<String, Object> testItem, boolean crlf) {
         String content = rawContent.replace("\r\n", "\n");
         if (crlf) content = content.replace("\n", "\r\n");
@@ -280,14 +299,15 @@ public class TestRunner {
             // parse error will be reported when we call play() below; fall through
         }
 
-        // Build translations and options if a translation is requested
-        InterpreterOptions options = null;
+        // Build options (always register the canonical custom functions; add
+        // translations across the import tree if requested)
+        InterpreterOptions options = new InterpreterOptions();
+        options.functions = customTestFunctions();
         Object translationVal = testItem.get("translation");
         if (translationVal != null && earlyScript != null) {
             String lang = translationVal.toString();
             Object translations = Loreline.loadLocale(lang, earlyScript, filePath, TestRunner::handleFile);
             if (translations != null) {
-                options = new InterpreterOptions();
                 options.translations = translations;
             }
         }

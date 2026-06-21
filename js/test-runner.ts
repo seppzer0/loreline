@@ -126,6 +126,16 @@ function compareOutput(expected: string, actual: string): number {
     return -1;
 }
 
+// Canonical host-registered functions used by test/Functions-Custom.lor to verify
+// the custom-function contract: each receives (interpreter, args), where args is an
+// array and the interpreter can read/write runtime state.
+const customTestFunctions = {
+    custom_echo: (_interp: Interpreter, args: any[]): string => args.join(','),
+    custom_arg_count: (_interp: Interpreter, args: any[]): number => args.length,
+    custom_set_state: (interp: Interpreter, args: any[]): null => { interp.setStateField(args[0], args[1]); return null; },
+    custom_get_state: (interp: Interpreter, args: any[]): any => interp.getStateField(args[0]),
+};
+
 // Run a single test case
 function runTest(filePath: string, content: string, testItem: TestItem, crlf: boolean): Promise<TestResult> {
     return new Promise((resolve: (result: TestResult) => void) => {
@@ -149,7 +159,7 @@ function runTest(filePath: string, content: string, testItem: TestItem, crlf: bo
         // Translations are built after parsing the main script so that
         // loadLocale can walk the import tree and merge per-file `.<locale>.lor`
         // siblings. See the parse block below.
-        let options: InterpreterOptions | undefined = undefined;
+        let options: InterpreterOptions = { functions: customTestFunctions };
 
         // Load restoreFile content if specified
         let restoreInput: string | null = null;
@@ -254,7 +264,7 @@ function runTest(filePath: string, content: string, testItem: TestItem, crlf: bo
                 const lang: string = testItem.translation;
                 const translations: Translations | null = Loreline.loadLocale(lang, script, filePath, handleFile);
                 if (translations) {
-                    options = { translations };
+                    options = { functions: customTestFunctions, translations };
                 }
             }
 

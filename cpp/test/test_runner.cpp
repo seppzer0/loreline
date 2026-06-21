@@ -566,6 +566,56 @@ static void testChoice(
     }
 }
 
+/* ── Canonical custom functions ─────────────────────────────────────────────
+ * Used by test/Functions-Custom.lor to verify the custom-function contract via
+ * the C API: each receives (interp, args, argCount), where args is an array and
+ * the interpreter can read/write runtime state. The linc layer already adapts
+ * the core's positional call to this signature (Reflect.makeVarArgs). */
+
+static std::string lorelineValueToString(const Loreline_Value& v) {
+    switch (v.type) {
+        case Loreline_StringValue: return v.stringValue.c_str() ? std::string(v.stringValue.c_str()) : "";
+        case Loreline_Int: return std::to_string(v.intValue);
+        case Loreline_Float: return std::to_string(v.floatValue);
+        case Loreline_Bool: return v.boolValue ? "true" : "false";
+        default: return "";
+    }
+}
+
+static Loreline_Value custom_echo(Loreline_Interpreter* interp, const Loreline_Value* args, int argCount, void* userData) {
+    std::string result;
+    for (int i = 0; i < argCount; i++) {
+        if (i > 0) result += ",";
+        result += lorelineValueToString(args[i]);
+    }
+    return Loreline_Value::from_string(Loreline_String(result.c_str()));
+}
+
+static Loreline_Value custom_arg_count(Loreline_Interpreter* interp, const Loreline_Value* args, int argCount, void* userData) {
+    return Loreline_Value::from_int(argCount);
+}
+
+static Loreline_Value custom_set_state(Loreline_Interpreter* interp, const Loreline_Value* args, int argCount, void* userData) {
+    if (argCount >= 2 && args[0].type == Loreline_StringValue) {
+        Loreline_setStateField(interp, args[0].stringValue, args[1]);
+    }
+    return Loreline_Value::null_val();
+}
+
+static Loreline_Value custom_get_state(Loreline_Interpreter* interp, const Loreline_Value* args, int argCount, void* userData) {
+    if (argCount >= 1 && args[0].type == Loreline_StringValue) {
+        return Loreline_getStateField(interp, args[0].stringValue);
+    }
+    return Loreline_Value::null_val();
+}
+
+static void addCustomTestFunctions(Loreline_InterpreterOptions* options) {
+    Loreline_optionsAddFunction(options, Loreline_String("custom_echo"), custom_echo, nullptr);
+    Loreline_optionsAddFunction(options, Loreline_String("custom_arg_count"), custom_arg_count, nullptr);
+    Loreline_optionsAddFunction(options, Loreline_String("custom_set_state"), custom_set_state, nullptr);
+    Loreline_optionsAddFunction(options, Loreline_String("custom_get_state"), custom_get_state, nullptr);
+}
+
 static TestResult runTest(const std::string& filePath, const std::string& rawContent,
                           const TestItem& item, bool crlf) {
     /* Normalize line endings */
@@ -613,14 +663,16 @@ static TestResult runTest(const std::string& filePath, const std::string& rawCon
     /* Parse and play */
     Loreline_Script* script = Loreline_parse(content.c_str(), filePath.c_str(), fileHandler, nullptr);
     if (script) {
-        /* Load translations after parse: walks the import tree and loads .<locale>.lor for each file */
+        /* Always register the canonical custom functions; add translations
+         * (walked across the import tree) if requested */
+        options = Loreline_createOptions();
+        addCustomTestFunctions(options);
+        ctx.options = options;
         if (!item.translation.empty()) {
             translations = Loreline_loadLocale(
                 item.translation.c_str(), script, Loreline_String(), fileHandler, nullptr);
             if (translations) {
-                options = Loreline_createOptions();
                 Loreline_optionsSetTranslations(options, translations);
-                ctx.options = options;
             }
         }
 

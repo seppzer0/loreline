@@ -1235,19 +1235,7 @@ async function main() {
             fs.rmSync('build/cs/Loreline', { recursive: true, force: true });
         }
 
-        let haxeBuildCsArgs = [
-            '--class-path', 'src',
-            '--cs', 'build/cs',
-            '-D', 'no-compilation',
-            '-D', 'no-root',
-            '-D', 'real-position',
-            '-D', 'loreline_use_cs_types',
-            '-D', 'loreline_cs_api',
-            '-D', 'erase-generics',
-            '--main', 'loreline.lib.Library'
-        ];
-
-        await command(haxe, haxeBuildCsArgs.concat(haxeBuildArgs).concat([]));
+        await command(haxe, ['build-cs.hxml'].concat(haxeBuildArgs));
 
         // Remove the generated Library entry point (not part of the public API)
         for (const f of [
@@ -1354,18 +1342,7 @@ async function main() {
     if (buildJs) {
         console.log('Export loreline for Javascript');
 
-        let haxeBuildJsArgs = [
-            '--class-path', 'src',
-            '--js', 'js/loreline.js',
-            '-D', 'js-es=6',
-            '-D', 'loreline_use_js_types',
-            '-D', 'loreline_typedef_options',
-            '-D', 'loreline_functions_map_dynamic_access',
-            '-D', 'loreline_node_id_class',
-            '--main', 'loreline.lib.Library'
-        ];
-
-        await command(haxe, haxeBuildJsArgs.concat(haxeBuildArgs).concat([]));
+        await command(haxe, ['build-js.hxml'].concat(haxeBuildArgs));
 
         let ln = process.platform == 'win32' ? '\r\n' : '\n';
 
@@ -1394,16 +1371,7 @@ async function main() {
 
         fs.mkdirSync('py/loreline', { recursive: true });
 
-        let haxeBuildPyArgs = [
-            '--class-path', 'src',
-            '--python', 'py/loreline/_core.py',
-            '-D', 'loreline_typedef_options',
-            '-D', 'loreline_functions_map_dynamic_access',
-            '-D', 'loreline_node_id_class',
-            '--main', 'loreline.lib.Library'
-        ];
-
-        await command(haxe, haxeBuildPyArgs.concat(haxeBuildArgs).concat([]));
+        await command(haxe, ['build-python.hxml'].concat(haxeBuildArgs));
 
         // Post-process: guard the main() entry-point call
         let py = fs.readFileSync('py/loreline/_core.py', 'utf8');

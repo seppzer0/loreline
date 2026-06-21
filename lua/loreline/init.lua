@@ -151,6 +151,21 @@ function Interpreter._new(internal)
     return setmetatable({ _internal = internal }, Interpreter)
 end
 
+--- Return the single Interpreter wrapper bound to a raw core interpreter.
+-- Cached on the interpreter's own `wrapper` field, so the exact same instance is
+-- reused for every callback and custom-function call (and is the object returned
+-- by `play`/`resume`). Lifetime is tied to the interpreter; no global cache to leak.
+-- @param internal table|nil The internal Haxe interpreter object.
+function Interpreter._of(internal)
+    if internal == nil then return nil end
+    local wrapper = internal.wrapper
+    if wrapper == nil then
+        wrapper = Interpreter._new(internal)
+        internal.wrapper = wrapper
+    end
+    return wrapper
+end
+
 --- Save the current interpreter state.
 -- @return table Opaque save-data that can be passed to `loreline.resume()`
 --   or `interpreter:restore()` later.
@@ -239,24 +254,35 @@ end
 
 -- ── Callback bridges ────────────────────────────────────────────────────
 
+-- Adapt custom functions to the documented `(interpreter, args)` signature.
+-- The core passes the raw interpreter followed by the script arguments as an
+-- array; convert the interpreter to its Lua wrapper here.
+local function wrap_functions(functions)
+    if functions == nil then return nil end
+    local wrapped = {}
+    for name, fn in pairs(functions) do
+        wrapped[name] = function(interp, args)
+            return fn(Interpreter._of(interp), hx_array_to_lua(args))
+        end
+    end
+    return wrapped
+end
+
 local function make_dialogue_bridge(handle_dialogue)
     return function(interp, character, text, tags, advance)
-        local wrapper = Interpreter._new(interp)
-        handle_dialogue(wrapper, character, text, wrap_tags(tags), advance)
+        handle_dialogue(Interpreter._of(interp), character, text, wrap_tags(tags), advance)
     end
 end
 
 local function make_choice_bridge(handle_choice)
     return function(interp, options, select)
-        local wrapper = Interpreter._new(interp)
-        handle_choice(wrapper, wrap_options(options), select)
+        handle_choice(Interpreter._of(interp), wrap_options(options), select)
     end
 end
 
 local function make_finish_bridge(handle_finish)
     return function(interp)
-        local wrapper = Interpreter._new(interp)
-        handle_finish(wrapper)
+        handle_finish(Interpreter._of(interp))
     end
 end
 
@@ -304,7 +330,7 @@ function M.play(script, handle_dialogue, handle_choice, handle_finish, beat_name
                 strictAccess = options.strict_access ~= nil,
                 translations = options.translations ~= nil,
             },
-            functions = options.functions,
+            functions = wrap_functions(options.functions),
             strictAccess = options.strict_access or false,
             translations = options.translations,
         })
@@ -318,7 +344,7 @@ function M.play(script, handle_dialogue, handle_choice, handle_finish, beat_name
         beat_name,
         hx_options
     )
-    return Interpreter._new(internal)
+    return Interpreter._of(internal)
 end
 
 --- Resume a script from saved state.
@@ -339,7 +365,7 @@ function M.resume(script, handle_dialogue, handle_choice, handle_finish, save_da
                 strictAccess = options.strict_access ~= nil,
                 translations = options.translations ~= nil,
             },
-            functions = options.functions,
+            functions = wrap_functions(options.functions),
             strictAccess = options.strict_access or false,
             translations = options.translations,
         })
@@ -354,7 +380,7 @@ function M.resume(script, handle_dialogue, handle_choice, handle_finish, save_da
         beat_name,
         hx_options
     )
-    return Interpreter._new(internal)
+    return Interpreter._of(internal)
 end
 
 --- Extract translations from a parsed translation script.

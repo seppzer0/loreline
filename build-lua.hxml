@@ -5,3 +5,5 @@
 -D loreline_functions_map_dynamic_access
 -D loreline_node_id_class
 -D lua-vanilla
+-D loreline_auto_wrap_functions
+-D loreline_lua_api

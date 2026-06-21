@@ -577,6 +577,18 @@ class Cli {
         return result;
     }
 
+    // Canonical host-registered functions used by test/Functions-Custom.lor to
+    // verify the custom-function contract: each receives (interpreter, args),
+    // where args is an array and the interpreter can read/write runtime state.
+    static function customTestFunctions():loreline.Interpreter.FunctionsMap {
+        final fns:loreline.Interpreter.FunctionsMap = new Map<String, Any>();
+        fns.set("custom_echo", (interp:Interpreter, args:Array<Any>) -> [for (a in args) Std.string(a)].join(","));
+        fns.set("custom_arg_count", (interp:Interpreter, args:Array<Any>) -> args.length);
+        fns.set("custom_set_state", (interp:Interpreter, args:Array<Any>) -> { interp.setStateField(args[0], args[1]); null; });
+        fns.set("custom_get_state", (interp:Interpreter, args:Array<Any>) -> interp.getStateField(args[0]));
+        return fns;
+    }
+
     function testFile(file:String, crlf:Bool) {
 
         if (!FileSystem.exists(file) || FileSystem.isDirectory(file)) {
@@ -630,12 +642,12 @@ class Cli {
                 final restoreInput = restoreInputs[idx];
                 final saveAtChoice:Int = item.saveAtChoice != null ? item.saveAtChoice : -1;
                 final saveAtDialogue:Int = item.saveAtDialogue != null ? item.saveAtDialogue : -1;
-                var options:InterpreterOptions = null;
+                var options:InterpreterOptions = ({functions: customTestFunctions()} : InterpreterOptions);
                 if (item.translation != null) {
                     final lang:String = item.translation;
                     final translations = Loreline.loadLocale(lang, script, file, handleFile);
                     if (translations != null) {
-                        options = ({translations: translations} : InterpreterOptions);
+                        options = ({functions: customTestFunctions(), translations: translations} : InterpreterOptions);
                     }
                 }
                 final testCase = new InterpreterTestCase(
@@ -773,12 +785,12 @@ class Cli {
                 final restoreInput = restoreInputs[idx];
                 final saveAtChoice:Int = item.saveAtChoice != null ? item.saveAtChoice : -1;
                 final saveAtDialogue:Int = item.saveAtDialogue != null ? item.saveAtDialogue : -1;
-                var rtOptions:InterpreterOptions = null;
+                var rtOptions:InterpreterOptions = ({functions: customTestFunctions()} : InterpreterOptions);
                 if (item.translation != null) {
                     final lang:String = item.translation;
                     final translations = Loreline.loadLocale(lang, script, file, handleFile);
                     if (translations != null) {
-                        rtOptions = ({translations: translations} : InterpreterOptions);
+                        rtOptions = ({functions: customTestFunctions(), translations: translations} : InterpreterOptions);
                     }
                 }
                 final rtTestCase = new InterpreterTestCase(

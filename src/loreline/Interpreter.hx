@@ -387,7 +387,7 @@ typedef InterpreterOptions = {
 @:structInit class InterpreterOptions {
 #end
 
-    #if ((loreline_cs_api || loreline_jvm_api) && !macro)
+    #if ((loreline_cs_api || loreline_jvm_api || loreline_py_api || loreline_lua_api) && !macro)
     /**
      * When using Loreline outside of Haxe, the interpreter can be wrapped by
      * an object more tailored for the host platform. This is that wrapper object.
@@ -630,7 +630,7 @@ typedef InterpreterOptions = {
      */
     var customCreateFields:(interpreter:Interpreter, type:String, node:Node)->Any;
 
-    #if ((loreline_cs_api || loreline_jvm_api) && !macro)
+    #if ((loreline_cs_api || loreline_jvm_api || loreline_py_api || loreline_lua_api) && !macro)
     /**
      * When using Loreline outside of Haxe, the interpreter can be wrapped by
      * an object more tailored for the host platform. This is that wrapper object.
@@ -659,7 +659,7 @@ typedef InterpreterOptions = {
         this.strictAccess = options?.strictAccess ?? false;
         this.translations = options?.translations;
 
-        #if ((loreline_cs_api || loreline_jvm_api) && !macro)
+        #if ((loreline_cs_api || loreline_jvm_api || loreline_py_api || loreline_lua_api) && !macro)
         this.wrapper = options?.wrapper;
         #end
 
@@ -2236,8 +2236,16 @@ typedef InterpreterOptions = {
         builtins.bindAll(topLevelFunctions);
 
         if (functions != null) {
-            for (key => func in functions) {
-                topLevelFunctions.set(key, func);
+            // The functions map reaches us in different runtime shapes depending on
+            // the host binding: a StringMap (JVM/C#/C++/CLI) or an anonymous object
+            // (JS object, Lua table, Python _hx_AnonObject). Iterate whichever it is.
+            final fnsDyn:Dynamic = functions;
+            if (Std.isOfType(fnsDyn, haxe.Constraints.IMap)) {
+                final fnsMap:Map<String, Any> = cast fnsDyn;
+                for (key => func in fnsMap) registerTopLevelFunction(key, func);
+            }
+            else {
+                for (key in Reflect.fields(fnsDyn)) registerTopLevelFunction(key, Reflect.field(fnsDyn, key));
             }
         }
 
@@ -2252,6 +2260,25 @@ typedef InterpreterOptions = {
                 beatHelpers.set(key.substr(5), func);
         }
 
+    }
+
+    /**
+     * Registers a single host-provided function under `key`.
+     *
+     * Host functions registered via the public API are documented to receive
+     * `(interpreter, args)`. The core calls functions with the script arguments
+     * spread positionally (like built-ins), so on bindings without a native
+     * adapter we wrap each one to re-collect those into an array and prepend the
+     * interpreter. Bindings with their own adapter (JVM/C#/C++) don't set the
+     * `loreline_auto_wrap_functions` define and store the function as-is.
+     */
+    function registerTopLevelFunction(key:String, func:Any) {
+        #if loreline_auto_wrap_functions
+        final userFunc = func;
+        topLevelFunctions.set(key, Reflect.makeVarArgs(args -> Reflect.callMethod(null, userFunc, [this, args])));
+        #else
+        topLevelFunctions.set(key, func);
+        #end
     }
 
     function initializeStringLiteralProcessors(processors:Array<(str:NStringLiteral) -> NStringLiteral>) {

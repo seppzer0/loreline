@@ -99,28 +99,62 @@ def _wrap_option(opt: _core.loreline_ChoiceOption) -> ChoiceOption:
     )
 
 
+def _wrapper_for(interp):
+    """Return the single Interpreter wrapper bound to a raw core interpreter.
+
+    The wrapper is cached on the interpreter's own ``wrapper`` field so the exact
+    same instance is reused for every callback and custom-function call (and is
+    the object returned by ``play``/``resume``). Its lifetime is tied to the
+    interpreter, so there is no global cache to leak.
+    """
+    if interp is None:
+        return None
+    wrapper = interp.wrapper
+    if wrapper is None:
+        wrapper = Interpreter(interp)
+        interp.wrapper = wrapper
+    return wrapper
+
+
+def _wrap_functions(functions):
+    """Adapt custom functions to the documented ``(interpreter, args)`` signature.
+
+    The core passes the raw interpreter followed by the script arguments as an
+    array; convert the interpreter to its Python wrapper here.
+    """
+    if functions is None:
+        return None
+    wrapped = {}
+    for name, fn in functions.items():
+        def make(fn):
+            def call(interp, args):
+                return fn(_wrapper_for(interp), args)
+            return call
+        wrapped[name] = make(fn)
+    # The functions map is a DynamicAccess on the Haxe side, so it must be an
+    # _hx_AnonObject (Reflect.fields does not see a plain dict's keys).
+    return _core._hx_AnonObject(wrapped)
+
+
 def _make_dialogue_bridge(handle_dialogue: DialogueHandler) -> Callable:
     """Wrap a public DialogueHandler to bridge internal types."""
     def bridge(interp, character, text, tags, advance):
-        wrapper = Interpreter(interp)
-        handle_dialogue(wrapper, character, text, _wrap_tags(tags), advance)
+        handle_dialogue(_wrapper_for(interp), character, text, _wrap_tags(tags), advance)
     return bridge
 
 
 def _make_choice_bridge(handle_choice: ChoiceHandler) -> Callable:
     """Wrap a public ChoiceHandler to bridge internal types."""
     def bridge(interp, options, select):
-        wrapper = Interpreter(interp)
         wrapped_options = [_wrap_option(o) for o in options]
-        handle_choice(wrapper, wrapped_options, select)
+        handle_choice(_wrapper_for(interp), wrapped_options, select)
     return bridge
 
 
 def _make_finish_bridge(handle_finish: FinishHandler) -> Callable:
     """Wrap a public FinishHandler to bridge internal types."""
     def bridge(interp):
-        wrapper = Interpreter(interp)
-        handle_finish(wrapper)
+        handle_finish(_wrapper_for(interp))
     return bridge
 
 
@@ -416,7 +450,7 @@ class Loreline:
             The running Interpreter instance.
         """
         options = _core._hx_AnonObject({
-            "functions": functions,
+            "functions": _wrap_functions(functions),
             "strictAccess": strict_access,
             "translations": translations,
         })
@@ -429,7 +463,7 @@ class Loreline:
             beat_name,
             options,
         )
-        return Interpreter(internal)
+        return _wrapper_for(internal)
 
     @staticmethod
     def resume(
@@ -460,7 +494,7 @@ class Loreline:
             The running Interpreter instance.
         """
         options = _core._hx_AnonObject({
-            "functions": functions,
+            "functions": _wrap_functions(functions),
             "strictAccess": strict_access,
             "translations": translations,
         })
@@ -474,7 +508,7 @@ class Loreline:
             beat_name,
             options,
         )
-        return Interpreter(internal)
+        return _wrapper_for(internal)
 
     @staticmethod
     def extract_translations(script: Script) -> Any:
